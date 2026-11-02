@@ -1,0 +1,191 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["invoicing"]
+}
+
+enum IssuerType {
+  DOCTOR
+  CLINIC
+
+  @@schema("invoicing")
+}
+
+enum IntegrationStatus {
+  NOT_CONFIGURED
+  PENDING_DIAN
+  IN_HABILITATION
+  ENABLED
+  SUSPENDED
+
+  @@schema("invoicing")
+}
+
+enum DocumentKind {
+  INVOICE
+  CREDIT_NOTE
+  DEBIT_NOTE
+  SUPPORT_DOCUMENT
+  SUPPORT_ADJUSTMENT
+
+  @@schema("invoicing")
+}
+
+enum AliaddoMode {
+  TEST
+  HABILITATION
+  PRODUCTION
+
+  @@schema("invoicing")
+}
+
+enum DocumentStatus {
+  CREATED
+  SENT
+  FAILED
+
+  @@schema("invoicing")
+}
+
+enum DocumentFileType {
+  PDF
+  XML
+  XML_ZIP
+  APPLICATION_RESPONSE
+  ATTACHED_DOCUMENT
+
+  @@schema("invoicing")
+}
+
+model IssuerIntegration {
+  id        String            @id @default(uuid())
+  issuerType IssuerType
+  issuerId  String
+
+  provider  String            @default("ALIADDO")
+  status    IntegrationStatus @default(NOT_CONFIGURED)
+
+  dianTestSetId String?
+  apiKeyHint    String?
+
+  // Provider secrets (encrypted at rest)
+  aliaddoApiKeyEnc String?
+  aliaddoApiKeyIv  String?
+  aliaddoApiKeyTag String?
+
+  // Onboarding (data capturada en MeuSalud para revisión interna)
+  onboardingData        Json?
+  onboardingSubmittedAt DateTime?
+  onboardingDraftUpdatedAt DateTime?
+  onboardingReviewedAt  DateTime?
+  onboardingReviewedByAuthUserId String?
+  onboardingReviewNotes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([issuerType, issuerId])
+  @@index([issuerType, issuerId])
+  @@schema("invoicing")
+}
+
+model InvoicingDocument {
+  id String @id @default(uuid())
+
+  issuerType IssuerType
+  issuerId   String
+  authUserId String?
+
+  kind   DocumentKind
+  mode   AliaddoMode
+  status DocumentStatus @default(CREATED)
+
+  requestPayload Json
+
+  // Response summary (best-effort)
+  aliaddoId         String?
+  cufe             String?
+  cuds             String?
+  dianDeliveryStatus String?
+  dianState        String?
+  dianStateReason  Json?
+
+  urlPdf                   String?
+  urlXmlDocument            String?
+  urlXmlDocumentZip         String?
+  urlXmlApplicationResponse String?
+  urlXmlAttachedDocument    String?
+
+  attemptCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attempts InvoicingDocumentAttempt[]
+  files    InvoicingDocumentFile[]
+
+  @@index([issuerType, issuerId, kind])
+  @@schema("invoicing")
+}
+
+model InvoicingDocumentAttempt {
+  id String @id @default(uuid())
+
+  documentId String
+  document   InvoicingDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  number Int
+  mode   AliaddoMode
+  authUserId String?
+
+  requestPayload Json
+
+  responseStatusCode Int?
+  responseBody       Json?
+  errorMessage       String?
+  durationMs         Int?
+
+  createdAt DateTime @default(now())
+
+  @@unique([documentId, number])
+  @@index([documentId])
+  @@schema("invoicing")
+}
+
+model InvoicingDocumentFile {
+  id String @id @default(uuid())
+
+  documentId String
+  document   InvoicingDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  type       DocumentFileType
+  attemptNumber Int?
+  sourceUrl  String?
+
+  bucket     String
+  objectKey  String
+  contentType String?
+  sizeBytes  Int?
+  sha256     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([documentId, type])
+  @@schema("invoicing")
+}
+
+model CiiuClass {
+  code        String   @id
+  description String
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active])
+  @@schema("invoicing")
+}
