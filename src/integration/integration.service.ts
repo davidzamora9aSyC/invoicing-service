@@ -6,6 +6,7 @@ import { IntegrationSecretsService } from './integration-secrets.service';
 import { SubmitInvoicingOnboardingDto } from './dto/submit-invoicing-onboarding.dto';
 import { RabbitmqService } from '../rabbitmq/rabbitmq.service';
 import { SaveInvoicingOnboardingDraftDto } from './dto/save-invoicing-onboarding-draft.dto';
+import { UpsertFacilFacturaCredentialsDto } from './dto/upsert-facil-factura-credentials.dto';
 
 @Injectable()
 export class IntegrationService {
@@ -317,6 +318,86 @@ export class IntegrationService {
       iv: integration.aliaddoApiKeyIv,
       tag: integration.aliaddoApiKeyTag,
     });
+  }
+
+  async upsertFacilFacturaCredentials(
+    role: Role | undefined,
+    subjectId: string | undefined,
+    dto: UpsertFacilFacturaCredentialsDto,
+  ) {
+    const issuer = this.issuerService.resolveIssuer(role, subjectId);
+    const apiKey = dto.apiKey.trim();
+    const apiSecret = dto.apiSecret.trim();
+    const key = this.secrets.encrypt(apiKey);
+    const secret = this.secrets.encrypt(apiSecret);
+    const isTest = dto.environment === 'TEST';
+    return this.prisma.issuerIntegration.upsert({
+      where: { issuerType_issuerId: issuer },
+      create: {
+        issuerType: issuer.issuerType,
+        issuerId: issuer.issuerId,
+        provider: 'FACIL_FACTURA',
+        status: isTest ? IntegrationStatus.NOT_CONFIGURED : IntegrationStatus.ENABLED,
+        apiKeyHint: createApiKeyHint(apiKey),
+        facilFacturaApiKeyEnc: key.enc,
+        facilFacturaApiKeyIv: key.iv,
+        facilFacturaApiKeyTag: key.tag,
+        facilFacturaApiSecretEnc: secret.enc,
+        facilFacturaApiSecretIv: secret.iv,
+        facilFacturaApiSecretTag: secret.tag,
+      },
+      update: {
+        provider: 'FACIL_FACTURA',
+        ...(isTest ? {} : { status: IntegrationStatus.ENABLED }),
+        apiKeyHint: createApiKeyHint(apiKey),
+        facilFacturaApiKeyEnc: key.enc,
+        facilFacturaApiKeyIv: key.iv,
+        facilFacturaApiKeyTag: key.tag,
+        facilFacturaApiSecretEnc: secret.enc,
+        facilFacturaApiSecretIv: secret.iv,
+        facilFacturaApiSecretTag: secret.tag,
+      },
+      select: integrationSafeSelect,
+    });
+  }
+
+  async getFacilFacturaCredentials(role: Role | undefined, subjectId: string | undefined) {
+    const issuer = this.issuerService.resolveIssuer(role, subjectId);
+    const integration = await this.prisma.issuerIntegration.findUnique({
+      where: { issuerType_issuerId: issuer },
+      select: {
+        provider: true,
+        facilFacturaApiKeyEnc: true,
+        facilFacturaApiKeyIv: true,
+        facilFacturaApiKeyTag: true,
+        facilFacturaApiSecretEnc: true,
+        facilFacturaApiSecretIv: true,
+        facilFacturaApiSecretTag: true,
+      },
+    });
+    if (
+      integration?.provider !== 'FACIL_FACTURA' ||
+      !integration.facilFacturaApiKeyEnc ||
+      !integration.facilFacturaApiKeyIv ||
+      !integration.facilFacturaApiKeyTag ||
+      !integration.facilFacturaApiSecretEnc ||
+      !integration.facilFacturaApiSecretIv ||
+      !integration.facilFacturaApiSecretTag
+    ) {
+      return null;
+    }
+    return {
+      apiKey: this.secrets.decrypt({
+        enc: integration.facilFacturaApiKeyEnc,
+        iv: integration.facilFacturaApiKeyIv,
+        tag: integration.facilFacturaApiKeyTag,
+      }),
+      apiSecret: this.secrets.decrypt({
+        enc: integration.facilFacturaApiSecretEnc,
+        iv: integration.facilFacturaApiSecretIv,
+        tag: integration.facilFacturaApiSecretTag,
+      }),
+    };
   }
 }
 

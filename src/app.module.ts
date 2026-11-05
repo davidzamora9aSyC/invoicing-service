@@ -8,6 +8,7 @@ import { DocumentsModule } from './documents/documents.module';
 import { S3Module } from './storage/s3.module';
 import { IssuerModule } from './issuer/issuer.module';
 import { AliaddoModule } from './aliaddo/aliaddo.module';
+import { FacilFacturaModule } from './facil-factura/facil-factura.module';
 import { ResolutionsModule } from './resolutions/resolutions.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { OperationsModule } from './operations/operations.module';
@@ -23,6 +24,7 @@ import { CatalogsModule } from './catalogs/catalogs.module';
     RabbitmqModule,
     IssuerModule,
     AliaddoModule,
+    FacilFacturaModule,
     S3Module,
     IntegrationModule,
     DocumentsModule,

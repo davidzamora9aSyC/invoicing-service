@@ -78,6 +78,13 @@ model IssuerIntegration {
   aliaddoApiKeyIv  String?
   aliaddoApiKeyTag String?
 
+  facilFacturaApiKeyEnc String?
+  facilFacturaApiKeyIv  String?
+  facilFacturaApiKeyTag String?
+  facilFacturaApiSecretEnc String?
+  facilFacturaApiSecretIv  String?
+  facilFacturaApiSecretTag String?
+
   // Onboarding (data capturada en MeuSalud para revisión interna)
   onboardingData        Json?
   onboardingSubmittedAt DateTime?

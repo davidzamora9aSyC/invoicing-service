@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { AliaddoMode, DocumentFileType, DocumentKind, DocumentStatus, IntegrationStatus, Prisma } from '@prisma/client';
 import { AliaddoService } from '../aliaddo/aliaddo.service';
+import { FacilFacturaService } from '../facil-factura/facil-factura.service';
 import { IssuerService, Role } from '../issuer/issuer.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../storage/s3.service';
@@ -13,6 +14,7 @@ export class DocumentsService {
     private readonly prisma: PrismaService,
     private readonly issuerService: IssuerService,
     private readonly aliaddo: AliaddoService,
+    private readonly facilFactura: FacilFacturaService,
     private readonly s3: S3Service,
     private readonly integrationService: IntegrationService,
   ) {}
@@ -667,6 +669,134 @@ export class DocumentsService {
 
     return { documentId: doc.id, results };
   }
+
+  async listFacilFacturaResolutions(role: Role | undefined, subjectId: string | undefined) {
+    const credentials = await this.integrationService.getFacilFacturaCredentials(role, subjectId);
+    if (!credentials) {
+      throw new BadRequestException('Configura la API Key y el API Secret de Facil Factura en Integración.');
+    }
+    const body = await this.facilFactura.getResolutions(credentials);
+    return { options: mapFacilFacturaResolutions(body) };
+  }
+
+  async sendFacilFacturaInvoice(
+    role: Role | undefined,
+    subjectId: string | undefined,
+    authUserId: string | undefined,
+    payload: Record<string, unknown>,
+    health = false,
+  ) {
+    const credentials = await this.integrationService.getFacilFacturaCredentials(role, subjectId);
+    if (!credentials) {
+      throw new BadRequestException('Configura la API Key y el API Secret de Facil Factura en Integración.');
+    }
+    const { issuer } = await this.resolveIntegration(role, subjectId);
+    const document = await this.prisma.invoicingDocument.create({
+      data: {
+        issuerType: issuer.issuerType,
+        issuerId: issuer.issuerId,
+        authUserId: authUserId?.trim() || null,
+        kind: DocumentKind.INVOICE,
+        mode: AliaddoMode.TEST,
+        requestPayload: payload as unknown as Prisma.InputJsonValue,
+        attemptCount: 0,
+        status: DocumentStatus.CREATED,
+        dianDeliveryStatus: 'FACIL_FACTURA',
+      },
+    });
+
+    const startedAt = Date.now();
+    try {
+      const responseBody = health
+        ? await this.facilFactura.postHealthInvoice(credentials, payload)
+        : await this.facilFactura.postInvoice(credentials, payload);
+      const summary = this.parseFacilResponse(responseBody);
+      const durationMs = Date.now() - startedAt;
+      await this.prisma.invoicingDocumentAttempt.create({
+        data: {
+          documentId: document.id,
+          number: 1,
+          mode: AliaddoMode.TEST,
+          authUserId: authUserId?.trim() || null,
+          requestPayload: payload as unknown as Prisma.InputJsonValue,
+          responseStatusCode: 200,
+          responseBody: (responseBody ?? {}) as Prisma.InputJsonValue,
+          durationMs,
+        },
+      });
+      return this.prisma.invoicingDocument.update({
+        where: { id: document.id },
+        data: {
+          status: DocumentStatus.SENT,
+          attemptCount: 1,
+          aliaddoId: summary.aliaddoId ?? null,
+          cufe: summary.cufe ?? null,
+          dianState: summary.dianState ?? null,
+          dianDeliveryStatus: 'FACIL_FACTURA',
+        },
+      });
+    } catch (err) {
+      const durationMs = Date.now() - startedAt;
+      const message = err instanceof HttpException ? messageFromHttpException(err) : 'No se pudo emitir en Facil Factura';
+      const statusCode = err instanceof HttpException ? err.getStatus() : 502;
+      await this.prisma.invoicingDocumentAttempt.create({
+        data: {
+          documentId: document.id,
+          number: 1,
+          mode: AliaddoMode.TEST,
+          authUserId: authUserId?.trim() || null,
+          requestPayload: payload as unknown as Prisma.InputJsonValue,
+          responseStatusCode: statusCode,
+          errorMessage: message,
+          durationMs,
+        },
+      });
+      await this.prisma.invoicingDocument.update({
+        where: { id: document.id },
+        data: {
+          status: DocumentStatus.FAILED,
+          attemptCount: 1,
+          dianDeliveryStatus: 'FACIL_FACTURA',
+          dianStateReason: { message } as Prisma.InputJsonValue,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async downloadFacilFacturaPdf(documentId: string, role: Role | undefined, subjectId: string | undefined) {
+    const doc = await this.getDocument(documentId, role, subjectId);
+    if (doc.dianDeliveryStatus !== 'FACIL_FACTURA' || !doc.aliaddoId) {
+      throw new BadRequestException('Este documento no tiene PDF de Facil Factura.');
+    }
+    const credentials = await this.integrationService.getFacilFacturaCredentials(role, subjectId);
+    if (!credentials) {
+      throw new BadRequestException('Configura la API Key y el API Secret de Facil Factura en Integración.');
+    }
+    return this.facilFactura.getPdf(credentials, doc.aliaddoId);
+  }
+
+  private parseFacilResponse(responseBody: unknown) {
+    const body = responseBody && typeof responseBody === 'object' ? (responseBody as Record<string, unknown>) : {};
+    const nested = body.data && typeof body.data === 'object' ? (body.data as Record<string, unknown>) : {};
+    const source = asString(body.id) ? body : nested;
+    return {
+      aliaddoId: asString(source.id) ?? asString(body.id),
+      cufe: asString(source.cufe) ?? asString(nested.cufe),
+      dianState: asString(source.status) ?? asString(source.state) ?? asString(body.status) ?? asString(nested.status),
+    };
+  }
+}
+
+function messageFromHttpException(err: HttpException) {
+  const response = err.getResponse();
+  if (typeof response === 'string') return response;
+  if (response && typeof response === 'object' && 'message' in response) {
+    const message = (response as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+    if (Array.isArray(message)) return message.map(String).join('\n');
+  }
+  return err.message;
 }
 
 function asString(value: unknown): string | undefined {
@@ -703,6 +833,71 @@ function fileTypeSourceUrl(
   if (type === DocumentFileType.ATTACHED_DOCUMENT) return doc.urlXmlAttachedDocument;
   return null;
 }
+
+function mapFacilFacturaResolutions(body: unknown) {
+  const record = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  const rows = Array.isArray(record.resolutions) ? record.resolutions : [];
+  return rows
+    .map((row, index) => mapFacilFacturaResolution(row, index))
+    .filter((row): row is FacilFacturaResolutionOption => Boolean(row));
+}
+
+function mapFacilFacturaResolution(row: unknown, index: number): FacilFacturaResolutionOption | null {
+  if (!row || typeof row !== 'object') return null;
+  const record = row as Record<string, unknown>;
+  const prefix = readText(record, ['prefix', 'resolutionPrefix', 'Prefix']);
+  const resolutionNumber = readText(record, ['resolutionNumber', 'resolution_number', 'number', 'resolution']);
+  if (!prefix && !resolutionNumber) return null;
+  if (isInactiveResolution(record)) return null;
+  const rangeFrom = readNumber(record, ['rangeFrom', 'from', 'initial', 'min', 'fromNumber', 'rangeInitial']);
+  const rangeTo = readNumber(record, ['rangeTo', 'to', 'final', 'max', 'toNumber', 'rangeFinal']);
+  const nextNumber = readNumber(record, ['nextNumber', 'next', 'currentNumber']);
+  return {
+    id: `${prefix || 'sin-prefijo'}-${resolutionNumber || index}`,
+    prefix: prefix || '',
+    resolutionNumber: resolutionNumber || '',
+    nextNumber,
+    rangeFrom,
+    rangeTo,
+    validFrom: readText(record, ['validFrom', 'fromDate', 'startDate', 'resolutionValidFrom']),
+    validUntil: readText(record, ['validUntil', 'toDate', 'endDate', 'resolutionValidUntil']),
+  };
+}
+
+function isInactiveResolution(record: Record<string, unknown>) {
+  if (record.active === false || record.isActive === false) return true;
+  const status = readText(record, ['status', 'state'])?.toLowerCase();
+  return status === 'inactive' || status === 'expired' || status === 'exhausted' || status === 'vencida' || status === 'agotada';
+}
+
+function readText(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
+}
+
+function readNumber(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  }
+  return null;
+}
+
+type FacilFacturaResolutionOption = {
+  id: string;
+  prefix: string;
+  resolutionNumber: string;
+  nextNumber: number | null;
+  rangeFrom: number | null;
+  rangeTo: number | null;
+  validFrom: string | null;
+  validUntil: string | null;
+};
 
 function normalizeError(err: unknown): { statusCode: number | null; responseBody: unknown | null; message: string } {
   if (err instanceof HttpException) {

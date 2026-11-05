@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Headers, Param, Put, Query } from '@nestjs/common';
 import { UpsertAliaddoApiKeyDto } from './dto/upsert-aliaddo-api-key.dto';
+import { UpsertFacilFacturaCredentialsDto } from './dto/upsert-facil-factura-credentials.dto';
 import { UpsertDianTestSetDto } from './dto/upsert-dian-testset.dto';
 import { SaveInvoicingOnboardingDraftDto } from './dto/save-invoicing-onboarding-draft.dto';
 import { SubmitInvoicingOnboardingDto } from './dto/submit-invoicing-onboarding.dto';
@@ -28,6 +29,19 @@ export class IntegrationController {
       role as Role | undefined,
       subjectId,
       dto.dianTestSetId,
+    );
+  }
+
+  @Put('me/facil-factura')
+  upsertFacilFacturaCredentials(
+    @Body() dto: UpsertFacilFacturaCredentialsDto,
+    @Headers('x-role') role?: string,
+    @Headers('x-subject-id') subjectId?: string,
+  ) {
+    return this.integrationService.upsertFacilFacturaCredentials(
+      role as Role | undefined,
+      subjectId,
+      dto,
     );
   }
 
