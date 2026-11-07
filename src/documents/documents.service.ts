@@ -673,7 +673,7 @@ export class DocumentsService {
   async listFacilFacturaResolutions(role: Role | undefined, subjectId: string | undefined) {
     const credentials = await this.integrationService.getFacilFacturaCredentials(role, subjectId);
     if (!credentials) {
-      throw new BadRequestException('Configura la API Key y el API Secret de Facil Factura en Integración.');
+      throw new BadRequestException('MeuDoc todavía no autoriza la facturación electrónica de esta cuenta.');
     }
     const body = await this.facilFactura.getResolutions(credentials);
     return { options: mapFacilFacturaResolutions(body) };
@@ -688,8 +688,15 @@ export class DocumentsService {
   ) {
     const credentials = await this.integrationService.getFacilFacturaCredentials(role, subjectId);
     if (!credentials) {
-      throw new BadRequestException('Configura la API Key y el API Secret de Facil Factura en Integración.');
+      throw new BadRequestException('MeuDoc todavía no autoriza la facturación electrónica de esta cuenta.');
     }
+    if (health && credentials.scope === 'INVOICE') {
+      throw new BadRequestException('Esta cuenta está autorizada solo para facturación, sin RIPS.');
+    }
+    if (!health && credentials.scope === 'RIPS') {
+      throw new BadRequestException('Esta cuenta está autorizada solo para RIPS.');
+    }
+    const mode = credentials.environment === 'PRODUCTION' ? AliaddoMode.PRODUCTION : AliaddoMode.TEST;
     const { issuer } = await this.resolveIntegration(role, subjectId);
     const document = await this.prisma.invoicingDocument.create({
       data: {
@@ -697,7 +704,7 @@ export class DocumentsService {
         issuerId: issuer.issuerId,
         authUserId: authUserId?.trim() || null,
         kind: DocumentKind.INVOICE,
-        mode: AliaddoMode.TEST,
+        mode,
         requestPayload: payload as unknown as Prisma.InputJsonValue,
         attemptCount: 0,
         status: DocumentStatus.CREATED,
@@ -716,7 +723,7 @@ export class DocumentsService {
         data: {
           documentId: document.id,
           number: 1,
-          mode: AliaddoMode.TEST,
+          mode,
           authUserId: authUserId?.trim() || null,
           requestPayload: payload as unknown as Prisma.InputJsonValue,
           responseStatusCode: 200,
@@ -743,7 +750,7 @@ export class DocumentsService {
         data: {
           documentId: document.id,
           number: 1,
-          mode: AliaddoMode.TEST,
+          mode,
           authUserId: authUserId?.trim() || null,
           requestPayload: payload as unknown as Prisma.InputJsonValue,
           responseStatusCode: statusCode,
@@ -771,7 +778,7 @@ export class DocumentsService {
     }
     const credentials = await this.integrationService.getFacilFacturaCredentials(role, subjectId);
     if (!credentials) {
-      throw new BadRequestException('Configura la API Key y el API Secret de Facil Factura en Integración.');
+      throw new BadRequestException('MeuDoc todavía no autoriza la facturación electrónica de esta cuenta.');
     }
     return this.facilFactura.getPdf(credentials, doc.aliaddoId);
   }

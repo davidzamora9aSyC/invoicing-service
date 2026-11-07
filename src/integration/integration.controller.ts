@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Headers, Param, Put, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Put, Query } from '@nestjs/common';
 import { UpsertAliaddoApiKeyDto } from './dto/upsert-aliaddo-api-key.dto';
-import { UpsertFacilFacturaCredentialsDto } from './dto/upsert-facil-factura-credentials.dto';
+import { AuthorizeFacilFacturaDto, RejectFacilFacturaDto } from './dto/authorize-facil-factura.dto';
+import { RequestFacilFacturaActivationDto } from './dto/request-facil-factura-activation.dto';
 import { UpsertDianTestSetDto } from './dto/upsert-dian-testset.dto';
 import { SaveInvoicingOnboardingDraftDto } from './dto/save-invoicing-onboarding-draft.dto';
 import { SubmitInvoicingOnboardingDto } from './dto/submit-invoicing-onboarding.dto';
@@ -32,13 +33,13 @@ export class IntegrationController {
     );
   }
 
-  @Put('me/facil-factura')
-  upsertFacilFacturaCredentials(
-    @Body() dto: UpsertFacilFacturaCredentialsDto,
+  @Post('me/facil-factura/request')
+  requestFacilFacturaActivation(
+    @Body() dto: RequestFacilFacturaActivationDto,
     @Headers('x-role') role?: string,
     @Headers('x-subject-id') subjectId?: string,
   ) {
-    return this.integrationService.upsertFacilFacturaCredentials(
+    return this.integrationService.requestFacilFacturaActivation(
       role as Role | undefined,
       subjectId,
       dto,
@@ -98,6 +99,44 @@ export class IntegrationController {
         limit: limit ? Number(limit) : undefined,
         page: page ? Number(page) : undefined,
       },
+    );
+  }
+
+  @Get('admin/facil-factura/requests')
+  listFacilFacturaRequests(
+    @Headers('x-role') role?: string,
+    @Headers('x-auth-user-id') authUserId?: string,
+  ) {
+    return this.integrationService.listFacilFacturaRequests(role as Role | undefined, authUserId);
+  }
+
+  @Put('admin/facil-factura/:integrationId/authorize')
+  authorizeFacilFactura(
+    @Body() dto: AuthorizeFacilFacturaDto,
+    @Param('integrationId') integrationId: string,
+    @Headers('x-role') role?: string,
+    @Headers('x-auth-user-id') authUserId?: string,
+  ) {
+    return this.integrationService.authorizeFacilFactura(
+      role as Role | undefined,
+      authUserId,
+      integrationId,
+      dto,
+    );
+  }
+
+  @Put('admin/facil-factura/:integrationId/reject')
+  rejectFacilFactura(
+    @Body() dto: RejectFacilFacturaDto,
+    @Param('integrationId') integrationId: string,
+    @Headers('x-role') role?: string,
+    @Headers('x-auth-user-id') authUserId?: string,
+  ) {
+    return this.integrationService.rejectFacilFactura(
+      role as Role | undefined,
+      authUserId,
+      integrationId,
+      dto?.notes,
     );
   }
 

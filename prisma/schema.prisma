@@ -85,6 +85,26 @@ model IssuerIntegration {
   facilFacturaApiSecretIv  String?
   facilFacturaApiSecretTag String?
 
+  facilFacturaScope String?
+  facilFacturaRequestedAt DateTime?
+  facilFacturaActiveEnvironment String?
+  facilFacturaTestKeyHint String?
+  facilFacturaProdKeyHint String?
+
+  facilFacturaTestApiKeyEnc String?
+  facilFacturaTestApiKeyIv String?
+  facilFacturaTestApiKeyTag String?
+  facilFacturaTestApiSecretEnc String?
+  facilFacturaTestApiSecretIv String?
+  facilFacturaTestApiSecretTag String?
+
+  facilFacturaProdApiKeyEnc String?
+  facilFacturaProdApiKeyIv String?
+  facilFacturaProdApiKeyTag String?
+  facilFacturaProdApiSecretEnc String?
+  facilFacturaProdApiSecretIv String?
+  facilFacturaProdApiSecretTag String?
+
   // Onboarding (data capturada en MeuSalud para revisión interna)
   onboardingData        Json?
   onboardingSubmittedAt DateTime?
