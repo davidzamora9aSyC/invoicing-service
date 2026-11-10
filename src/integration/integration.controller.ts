@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Headers, Param, Post, Put, Query } from '@nestjs/common';
 import { UpsertAliaddoApiKeyDto } from './dto/upsert-aliaddo-api-key.dto';
-import { AuthorizeFacilFacturaDto, RejectFacilFacturaDto } from './dto/authorize-facil-factura.dto';
+import { AuthorizeFacilFacturaDto, PrepareFacilFacturaDto, RejectFacilFacturaDto } from './dto/authorize-facil-factura.dto';
 import { RequestFacilFacturaActivationDto } from './dto/request-facil-factura-activation.dto';
 import { UpsertDianTestSetDto } from './dto/upsert-dian-testset.dto';
 import { SaveInvoicingOnboardingDraftDto } from './dto/save-invoicing-onboarding-draft.dto';
@@ -108,6 +108,23 @@ export class IntegrationController {
     @Headers('x-auth-user-id') authUserId?: string,
   ) {
     return this.integrationService.listFacilFacturaRequests(role as Role | undefined, authUserId);
+  }
+
+  @Get('admin/facil-factura/issuers')
+  listFacilFacturaIssuers(
+    @Headers('x-role') role?: string,
+    @Headers('x-auth-user-id') authUserId?: string,
+  ) {
+    return this.integrationService.listFacilFacturaIssuers(role as Role | undefined, authUserId);
+  }
+
+  @Put('admin/facil-factura/prepare')
+  prepareFacilFactura(
+    @Body() dto: PrepareFacilFacturaDto,
+    @Headers('x-role') role?: string,
+    @Headers('x-auth-user-id') authUserId?: string,
+  ) {
+    return this.integrationService.prepareFacilFactura(role as Role | undefined, authUserId, dto);
   }
 
   @Put('admin/facil-factura/:integrationId/authorize')

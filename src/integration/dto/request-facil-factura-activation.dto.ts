@@ -1,4 +1,4 @@
-import { IsEmail, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsIn, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
 
 export class RequestFacilFacturaActivationDto {
   @IsIn(['INVOICE', 'RIPS', 'BOTH'])
@@ -21,4 +21,47 @@ export class RequestFacilFacturaActivationDto {
   @IsOptional()
   @IsString()
   phone?: string;
+
+  @IsString()
+  @MinLength(8)
+  rutImageId!: string;
+
+  @IsOptional()
+  @IsString()
+  rutFileName?: string;
+
+  @IsOptional()
+  @IsString()
+  resolutionPdfImageId?: string;
+
+  @IsOptional()
+  @IsString()
+  resolutionPdfFileName?: string;
+
+  @IsOptional()
+  @IsString()
+  resolutionPrefix?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  resolutionNumber?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  resolutionRangeInitial?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  resolutionRangeFinal?: number;
+
+  @IsOptional()
+  @IsString()
+  resolutionValidFrom?: string;
+
+  @IsOptional()
+  @IsString()
+  resolutionValidUntil?: string;
 }

@@ -1,12 +1,12 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
-import { IntegrationStatus, Prisma } from '@prisma/client';
+import { IntegrationStatus, IssuerType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { IssuerService, Role } from '../issuer/issuer.service';
 import { IntegrationSecretsService } from './integration-secrets.service';
 import { SubmitInvoicingOnboardingDto } from './dto/submit-invoicing-onboarding.dto';
 import { RabbitmqService } from '../rabbitmq/rabbitmq.service';
 import { SaveInvoicingOnboardingDraftDto } from './dto/save-invoicing-onboarding-draft.dto';
-import { AuthorizeFacilFacturaDto } from './dto/authorize-facil-factura.dto';
+import { AuthorizeFacilFacturaDto, PrepareFacilFacturaDto } from './dto/authorize-facil-factura.dto';
 import { RequestFacilFacturaActivationDto } from './dto/request-facil-factura-activation.dto';
 
 @Injectable()
@@ -331,15 +331,22 @@ export class IntegrationService {
     const existing = await this.prisma.issuerIntegration.findUnique({
       where: { issuerType_issuerId: issuer },
     });
-    if (
-      existing?.provider === 'FACIL_FACTURA' &&
-      (existing.status === IntegrationStatus.ENABLED || existing.status === IntegrationStatus.IN_HABILITATION) &&
-      existing.facilFacturaActiveEnvironment
-    ) {
-      throw new BadRequestException('La facturación electrónica ya está autorizada.');
-    }
     if (existing?.status === IntegrationStatus.ENABLED && existing.provider !== 'FACIL_FACTURA') {
       throw new BadRequestException('Esta cuenta ya tiene facturación activa con otro proveedor.');
+    }
+    const ready = existing ? this.activeStoredAuthorization(existing) : null;
+    const hasResolutionPdf = Boolean(dto.resolutionPdfImageId?.trim());
+    const hasWrittenResolution = Boolean(
+      dto.resolutionPrefix?.trim() &&
+      dto.resolutionNumber &&
+      dto.resolutionRangeInitial &&
+      dto.resolutionRangeFinal,
+    );
+    if (!dto.rutImageId?.trim()) {
+      throw new BadRequestException('Sube el RUT del emisor.');
+    }
+    if (!hasResolutionPdf && !hasWrittenResolution) {
+      throw new BadRequestException('Sube el PDF de la resolución o escribe número, prefijo y rango.');
     }
     const previous =
       existing?.onboardingData && typeof existing.onboardingData === 'object'
@@ -352,6 +359,16 @@ export class IntegrationService {
       identificationType: dto.identificationType,
       identification: dto.identification.trim(),
       ...(dto.phone?.trim() ? { phone: dto.phone.trim() } : {}),
+      rutImageId: dto.rutImageId.trim(),
+      rutFileName: dto.rutFileName?.trim() || null,
+      resolutionPdfImageId: hasResolutionPdf ? dto.resolutionPdfImageId!.trim() : null,
+      resolutionPdfFileName: hasResolutionPdf ? dto.resolutionPdfFileName?.trim() || null : null,
+      resolutionPrefix: dto.resolutionPrefix?.trim() || null,
+      resolutionNumber: dto.resolutionNumber ?? null,
+      resolutionRangeInitial: dto.resolutionRangeInitial ?? null,
+      resolutionRangeFinal: dto.resolutionRangeFinal ?? null,
+      resolutionValidFrom: dto.resolutionValidFrom?.trim() || null,
+      resolutionValidUntil: dto.resolutionValidUntil?.trim() || null,
     };
     return this.prisma.issuerIntegration.upsert({
       where: { issuerType_issuerId: issuer },
@@ -359,16 +376,18 @@ export class IntegrationService {
         issuerType: issuer.issuerType,
         issuerId: issuer.issuerId,
         provider: 'FACIL_FACTURA',
-        status: IntegrationStatus.PENDING_DIAN,
+        status: ready?.status ?? IntegrationStatus.PENDING_DIAN,
         facilFacturaScope: dto.scope,
+        facilFacturaActiveEnvironment: ready?.environment,
         facilFacturaRequestedAt: new Date(),
         onboardingData: onboardingData as Prisma.InputJsonValue,
       },
       update: {
         provider: 'FACIL_FACTURA',
-        status: IntegrationStatus.PENDING_DIAN,
+        status: ready?.status ?? IntegrationStatus.PENDING_DIAN,
         facilFacturaScope: dto.scope,
-        facilFacturaRequestedAt: new Date(),
+        ...(ready ? { facilFacturaActiveEnvironment: ready.environment } : {}),
+        facilFacturaRequestedAt: existing?.facilFacturaRequestedAt ?? new Date(),
         onboardingData: onboardingData as Prisma.InputJsonValue,
       },
       select: integrationSafeSelect,
@@ -387,6 +406,94 @@ export class IntegrationService {
       select: integrationSafeSelect,
     });
     return { items };
+  }
+
+  async listFacilFacturaIssuers(role: Role | undefined, authUserId: string | undefined) {
+    assertAdmin(role);
+    if (!authUserId?.trim()) {
+      throw new BadRequestException('Missing authUserId');
+    }
+    const items = await this.prisma.issuerIntegration.findMany({
+      where: { provider: 'FACIL_FACTURA' },
+      orderBy: { updatedAt: 'desc' },
+      take: 200,
+      select: integrationSafeSelect,
+    });
+    return { items };
+  }
+
+  async prepareFacilFactura(
+    role: Role | undefined,
+    authUserId: string | undefined,
+    dto: PrepareFacilFacturaDto,
+  ) {
+    assertAdmin(role);
+    const reviewerId = authUserId?.trim();
+    if (!reviewerId) {
+      throw new BadRequestException('Missing authUserId');
+    }
+    const issuerType = dto.issuerType === 'CLINIC' ? IssuerType.CLINIC : IssuerType.DOCTOR;
+    const issuerId = dto.issuerId.trim();
+    const existing = await this.prisma.issuerIntegration.findUnique({
+      where: { issuerType_issuerId: { issuerType, issuerId } },
+    });
+    if (existing?.status === IntegrationStatus.ENABLED && existing.provider !== 'FACIL_FACTURA') {
+      throw new BadRequestException('Esta cuenta ya tiene facturación activa con otro proveedor.');
+    }
+    assertCredentialPair(dto.testApiKey, dto.testApiSecret, 'Pruebas');
+    assertCredentialPair(dto.productionApiKey, dto.productionApiSecret, 'Producción');
+    const testPlain = dto.testApiKey?.trim()
+      ? { apiKey: dto.testApiKey.trim(), apiSecret: dto.testApiSecret!.trim() }
+      : existing
+        ? this.readStoredPair(existing, 'test')
+        : null;
+    const prodPlain = dto.productionApiKey?.trim()
+      ? { apiKey: dto.productionApiKey.trim(), apiSecret: dto.productionApiSecret!.trim() }
+      : existing
+        ? this.readStoredPair(existing, 'prod')
+        : null;
+    if (dto.activeEnvironment === 'TEST' && !testPlain) {
+      throw new BadRequestException('Para dejar pruebas activo pega la API Key y el API Secret de prueba.');
+    }
+    if (dto.activeEnvironment === 'PRODUCTION' && !prodPlain) {
+      throw new BadRequestException('Para dejar producción activo pega la API Key y el API Secret de producción.');
+    }
+    const activePlain = dto.activeEnvironment === 'PRODUCTION' ? prodPlain : testPlain;
+    if (!activePlain) {
+      throw new BadRequestException('Pega al menos un par de llaves.');
+    }
+    const scope = dto.scope ?? existing?.facilFacturaScope ?? 'BOTH';
+    const data = {
+      provider: 'FACIL_FACTURA',
+      status: dto.activeEnvironment === 'PRODUCTION' ? IntegrationStatus.ENABLED : IntegrationStatus.IN_HABILITATION,
+      facilFacturaScope: scope,
+      facilFacturaActiveEnvironment: dto.activeEnvironment,
+      onboardingReviewedAt: new Date(),
+      onboardingReviewedByAuthUserId: reviewerId,
+      onboardingReviewNotes: dto.notes?.trim() || existing?.onboardingReviewNotes || null,
+      ...this.encryptedPairUpdate(activePlain, 'active'),
+      apiKeyHint: createApiKeyHint(activePlain.apiKey),
+      ...(dto.testApiKey?.trim() && testPlain
+        ? { ...this.encryptedPairUpdate(testPlain, 'test'), facilFacturaTestKeyHint: createApiKeyHint(testPlain.apiKey) }
+        : {}),
+      ...(dto.productionApiKey?.trim() && prodPlain
+        ? { ...this.encryptedPairUpdate(prodPlain, 'prod'), facilFacturaProdKeyHint: createApiKeyHint(prodPlain.apiKey) }
+        : {}),
+    };
+    const updated = await this.prisma.issuerIntegration.upsert({
+      where: { issuerType_issuerId: { issuerType, issuerId } },
+      create: {
+        issuerType,
+        issuerId,
+        ...data,
+      },
+      update: data,
+      select: integrationSafeSelect,
+    });
+    if (updated.status === IntegrationStatus.ENABLED) {
+      await this.publishIntegrationEnabled(updated);
+    }
+    return updated;
   }
 
   async authorizeFacilFactura(
@@ -562,6 +669,45 @@ export class IntegrationService {
     return {
       apiKey: this.secrets.decrypt({ enc: fields.enc, iv: fields.iv, tag: fields.tag }),
       apiSecret: this.secrets.decrypt({ enc: fields.secretEnc, iv: fields.secretIv, tag: fields.secretTag }),
+    };
+  }
+
+  private activeStoredAuthorization(existing: {
+    provider: string | null;
+    facilFacturaActiveEnvironment: string | null;
+    facilFacturaApiKeyEnc: string | null;
+    facilFacturaApiKeyIv: string | null;
+    facilFacturaApiKeyTag: string | null;
+    facilFacturaApiSecretEnc: string | null;
+    facilFacturaApiSecretIv: string | null;
+    facilFacturaApiSecretTag: string | null;
+    facilFacturaTestApiKeyEnc: string | null;
+    facilFacturaTestApiKeyIv: string | null;
+    facilFacturaTestApiKeyTag: string | null;
+    facilFacturaTestApiSecretEnc: string | null;
+    facilFacturaTestApiSecretIv: string | null;
+    facilFacturaTestApiSecretTag: string | null;
+    facilFacturaProdApiKeyEnc: string | null;
+    facilFacturaProdApiKeyIv: string | null;
+    facilFacturaProdApiKeyTag: string | null;
+    facilFacturaProdApiSecretEnc: string | null;
+    facilFacturaProdApiSecretIv: string | null;
+    facilFacturaProdApiSecretTag: string | null;
+  }) {
+    if (existing.provider !== 'FACIL_FACTURA') return null;
+    const environment = existing.facilFacturaActiveEnvironment === 'PRODUCTION'
+      ? 'PRODUCTION'
+      : existing.facilFacturaActiveEnvironment === 'TEST'
+        ? 'TEST'
+        : null;
+    if (!environment) return null;
+    const pair = environment === 'PRODUCTION'
+      ? this.readStoredPair(existing, 'prod') ?? this.readStoredPair(existing, 'active')
+      : this.readStoredPair(existing, 'test') ?? this.readStoredPair(existing, 'active');
+    if (!pair) return null;
+    return {
+      environment,
+      status: environment === 'PRODUCTION' ? IntegrationStatus.ENABLED : IntegrationStatus.IN_HABILITATION,
     };
   }
 
